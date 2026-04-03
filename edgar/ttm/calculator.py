@@ -14,11 +14,14 @@ Example:
 """
 from dataclasses import dataclass
 from datetime import date
-from typing import Callable, List, Optional, Tuple
+from typing import List, Optional, Tuple
+import logging
 
 import pandas as pd
 
 from edgar.entity.models import FinancialFact
+
+logger = logging.getLogger(__name__)
 
 # =============================================================================
 # Duration Classification Constants
@@ -427,11 +430,9 @@ class TTMCalculator:
         Returns True for:
         - Duration monetary flows (Revenue, Net Income) - truly additive
         """
-        from edgar.core import log
-
         # 1. Period Type Check - instant facts are never additive
         if fact.period_type == 'instant':
-            log.debug(f"Skipping derivation for {fact.concept}: instant period type")
+            logger.debug(f"Skipping derivation for {fact.concept}: instant period type")
             return False
 
         # 2. Unit Type Check
@@ -444,19 +445,19 @@ class TTMCalculator:
 
         # Exclude Shares and Ratios
         if unit_type in (UnitType.SHARES, UnitType.RATIO):
-            log.debug(f"Skipping derivation for {fact.concept}: unit type {unit_type}")
+            logger.debug(f"Skipping derivation for {fact.concept}: unit type {unit_type}")
             return False
 
         # Exclude Per Share metrics (EPS)
         # Note: get_unit_type maps per-share to CURRENCY, so check mappings directly
         if norm_unit in UnitNormalizer.PER_SHARE_MAPPINGS:
-            log.debug(f"Skipping derivation for {fact.concept}: per-share unit")
+            logger.debug(f"Skipping derivation for {fact.concept}: per-share unit")
             return False
 
         # Additional keyword safety
         unit_lower = norm_unit.lower()
         if 'shares' in unit_lower or 'pure' in unit_lower or 'ratio' in unit_lower:
-            log.debug(f"Skipping derivation for {fact.concept}: unit contains keyword")
+            logger.debug(f"Skipping derivation for {fact.concept}: unit contains keyword")
             return False
 
         return True
@@ -522,8 +523,6 @@ class TTMCalculator:
             and sorted by period_end
 
         """
-        from edgar.core import log
-
         # 1. Separate by duration bucket
         quarters = self._filter_by_duration(DurationBucket.QUARTER)
         ytd_6m = self._filter_by_duration(DurationBucket.YTD_6M)
@@ -534,7 +533,7 @@ class TTMCalculator:
 
         # 2. Keep all reported discrete quarters
         discrete_quarters.extend(quarters)
-        log.debug(f"Found {len(quarters)} reported discrete quarters")
+        logger.debug(f"Found {len(quarters)} reported discrete quarters")
 
         # 3. Derive quarters using helper methods
         discrete_quarters.extend(self._derive_q2_from_ytd6(quarters, ytd_6m))
@@ -543,7 +542,7 @@ class TTMCalculator:
 
         # 4. Deduplicate by period_end (keep latest filing)
         dedup_quarters = self._deduplicate_by_period_end(discrete_quarters)
-        log.debug(f"Quarterization complete: {len(dedup_quarters)} discrete quarters "
+        logger.debug(f"Quarterization complete: {len(dedup_quarters)} discrete quarters "
                   f"({len(quarters)} reported + {len(dedup_quarters) - len(quarters)} derived)")
 
         return dedup_quarters
@@ -553,7 +552,7 @@ class TTMCalculator:
         quarters: List[FinancialFact],
         ytd_6m: List[FinancialFact]
     ) -> List[FinancialFact]:
-        from edgar.core import log
+        
         derived = []
         for ytd6 in ytd_6m:
             if not self._is_additive_concept(ytd6):
@@ -564,7 +563,7 @@ class TTMCalculator:
 
                 # Skip if negative and concept should be positive (revenue-like)
                 if q2_value < 0 and self._is_positive_concept(ytd6.concept):
-                    log.warning(f"Data quality issue: Q1 ({q1.numeric_value/1e9:.2f}B) > "
+                    logger.warning(f"Data quality issue: Q1 ({q1.numeric_value/1e9:.2f}B) > "
                                 f"YTD_6M ({ytd6.numeric_value/1e9:.2f}B) for {ytd6.concept}, skipping Q2 derivation")
                     continue
 
@@ -575,7 +574,7 @@ class TTMCalculator:
                     period_start=q2_start
                 )
                 derived.append(q2_fact)
-                log.debug(f"Derived Q2 from YTD_6M: ${q2_value/1e9:.2f}B "
+                logger.debug(f"Derived Q2 from YTD_6M: ${q2_value/1e9:.2f}B "
                           f"(YTD_6M ${ytd6.numeric_value/1e9:.2f}B - Q1 ${q1.numeric_value/1e9:.2f}B)")
         return derived
 
@@ -584,7 +583,7 @@ class TTMCalculator:
         ytd_6m: List[FinancialFact],
         ytd_9m: List[FinancialFact]
     ) -> List[FinancialFact]:
-        from edgar.core import log
+        
         derived = []
         for ytd9 in ytd_9m:
             if not self._is_additive_concept(ytd9):
@@ -595,7 +594,7 @@ class TTMCalculator:
 
                 # Skip if negative and concept should be positive (revenue-like)
                 if q3_value < 0 and self._is_positive_concept(ytd9.concept):
-                    log.warning(f"Data quality issue: YTD_6M ({ytd6.numeric_value/1e9:.2f}B) > "
+                    logger.warning(f"Data quality issue: YTD_6M ({ytd6.numeric_value/1e9:.2f}B) > "
                                 f"YTD_9M ({ytd9.numeric_value/1e9:.2f}B) for {ytd9.concept}, skipping Q3 derivation")
                     continue
 
@@ -606,7 +605,7 @@ class TTMCalculator:
                     period_start=q3_start
                 )
                 derived.append(q3_fact)
-                log.debug(f"Derived Q3 from YTD_9M: ${q3_value/1e9:.2f}B "
+                logger.debug(f"Derived Q3 from YTD_9M: ${q3_value/1e9:.2f}B "
                           f"(YTD_9M ${ytd9.numeric_value/1e9:.2f}B - YTD_6M ${ytd6.numeric_value/1e9:.2f}B)")
         return derived
 
@@ -618,7 +617,7 @@ class TTMCalculator:
     ) -> List[FinancialFact]:
         from dataclasses import replace
 
-        from edgar.core import log
+        
         from edgar.entity.enhanced_statement import (
             calculate_fiscal_year_for_label,
             detect_fiscal_year_end,
@@ -636,7 +635,7 @@ class TTMCalculator:
 
                 # Skip if negative and concept should be positive (revenue-like)
                 if q4_value < 0 and self._is_positive_concept(fy.concept):
-                    log.warning(f"Data quality issue: YTD_9M ({ytd9.numeric_value/1e9:.2f}B) > "
+                    logger.warning(f"Data quality issue: YTD_9M ({ytd9.numeric_value/1e9:.2f}B) > "
                                 f"FY ({fy.numeric_value/1e9:.2f}B) for {fy.concept}, skipping Q4 derivation")
                     continue
 
@@ -652,7 +651,7 @@ class TTMCalculator:
                     )
                     q4_fact = replace(q4_fact, fiscal_year=calculated_fy)
                 derived.append(q4_fact)
-                log.debug(f"Derived Q4 from FY: ${q4_value/1e9:.2f}B "
+                logger.debug(f"Derived Q4 from FY: ${q4_value/1e9:.2f}B "
                           f"(FY ${fy.numeric_value/1e9:.2f}B - YTD_9M ${ytd9.numeric_value/1e9:.2f}B)")
                 continue
 
@@ -671,7 +670,7 @@ class TTMCalculator:
                 q1_q3_candidates.append(q)
 
             if not q1_q3_candidates:
-                log.debug(f"No Q1-Q3 quarters found for FY {fy.fiscal_year} - cannot derive Q4")
+                logger.debug(f"No Q1-Q3 quarters found for FY {fy.fiscal_year} - cannot derive Q4")
                 continue
 
             # Prefer the latest filing per quarter
@@ -683,12 +682,12 @@ class TTMCalculator:
 
             ordered_quarters = [quarter_by_period.get(p) for p in ("Q1", "Q2", "Q3")]
             if any(q is None for q in ordered_quarters):
-                log.debug(f"Incomplete Q1-Q3 set for FY {fy.fiscal_year} - cannot derive Q4")
+                logger.debug(f"Incomplete Q1-Q3 set for FY {fy.fiscal_year} - cannot derive Q4")
                 continue
 
             q1, q2, q3 = ordered_quarters
             if any(q.numeric_value is None for q in (q1, q2, q3)):
-                log.debug(f"Missing numeric values for Q1-Q3 FY {fy.fiscal_year} - cannot derive Q4")
+                logger.debug(f"Missing numeric values for Q1-Q3 FY {fy.fiscal_year} - cannot derive Q4")
                 continue
 
             q4_value = fy.numeric_value - (q1.numeric_value + q2.numeric_value + q3.numeric_value)
@@ -696,7 +695,7 @@ class TTMCalculator:
             # Skip if negative and concept should be positive (revenue-like)
             if q4_value < 0 and self._is_positive_concept(fy.concept):
                 q1_q3_sum = q1.numeric_value + q2.numeric_value + q3.numeric_value
-                log.warning(f"Data quality issue: Q1+Q2+Q3 ({q1_q3_sum/1e9:.2f}B) > "
+                logger.warning(f"Data quality issue: Q1+Q2+Q3 ({q1_q3_sum/1e9:.2f}B) > "
                             f"FY ({fy.numeric_value/1e9:.2f}B) for {fy.concept}, skipping Q4 derivation")
                 continue
 
@@ -712,7 +711,7 @@ class TTMCalculator:
                 )
                 q4_fact = replace(q4_fact, fiscal_year=calculated_fy)
             derived.append(q4_fact)
-            log.debug(
+            logger.debug(
                 f"Derived Q4 from FY: ${q4_value/1e9:.2f}B "
                 f"(FY ${fy.numeric_value/1e9:.2f}B - Q1-3 ${((q1.numeric_value + q2.numeric_value + q3.numeric_value)/1e9):.2f}B)"
             )
@@ -740,7 +739,7 @@ class TTMCalculator:
             List of derived EPS FinancialFact objects for Q4 periods
 
         """
-        from edgar.core import log
+        
 
         derived_eps = []
 
@@ -750,7 +749,7 @@ class TTMCalculator:
         q4_net_income = [q for q in ni_quarters if q.fiscal_period == 'Q4']
 
         if not q4_net_income:
-            log.debug("No derived Q4 Net Income found - cannot calculate Q4 EPS")
+            logger.debug("No derived Q4 Net Income found - cannot calculate Q4 EPS")
             return derived_eps
 
         # Step 2: Get shares by period (FY, YTD9, and quarterly for CV check)
@@ -839,12 +838,12 @@ class TTMCalculator:
         - CV > 0.03 (volatile shares): Q4_WAS = 4*FY_WAS - 3*YTD9_WAS,
           then Q4_EPS = Q4_NI / Q4_WAS
         """
-        from edgar.core import log
+        
         from edgar.entity.mappings_loader import get_primary_statement
         fy = q4_ni.fiscal_year
 
         if fy not in fy_shares_map or fy_shares_map[fy] <= 0:
-            log.debug(f"No FY shares found for {fy} - cannot calculate Q4 EPS")
+            logger.debug(f"No FY shares found for {fy} - cannot calculate Q4 EPS")
             return None
 
         fy_shares = fy_shares_map[fy]
@@ -858,7 +857,7 @@ class TTMCalculator:
             # Route A: Stable shares — use FY WAS directly (accurate proxy for Q4)
             q4_shares = fy_shares
             calc_method = 'derived_eps_stable_shares'
-            log.debug(f"FY{fy}: Stable shares (CV={cv:.4f}), using FY WAS = {fy_shares/1e6:.2f}M")
+            logger.debug(f"FY{fy}: Stable shares (CV={cv:.4f}), using FY WAS = {fy_shares/1e6:.2f}M")
         else:
             # Route B: Volatile shares — derive Q4 WAS from linear formula
             q4_shares = fy_shares  # Default fallback
@@ -870,23 +869,23 @@ class TTMCalculator:
                 if calculated_q4_shares > 0:
                     q4_shares = calculated_q4_shares
                     share_change_pct = ((q4_shares - fy_shares) / fy_shares) * 100
-                    log.debug(f"FY{fy}: Volatile shares (CV={cv:.4f}), "
+                    logger.debug(f"FY{fy}: Volatile shares (CV={cv:.4f}), "
                               f"Q4 WAS = {q4_shares/1e6:.2f}M "
                               f"(FY: {fy_shares/1e6:.2f}M, change: {share_change_pct:.1f}%)")
                 else:
-                    log.debug(f"FY{fy}: Derived Q4 shares invalid ({calculated_q4_shares}), "
+                    logger.debug(f"FY{fy}: Derived Q4 shares invalid ({calculated_q4_shares}), "
                               f"using FY shares")
             else:
-                log.debug(f"FY{fy}: Volatile shares but no YTD9 available, using FY shares")
+                logger.debug(f"FY{fy}: Volatile shares but no YTD9 available, using FY shares")
 
         # Guard against division by zero
         if q4_shares <= 0:
-            log.warning(f"FY{fy}: Invalid Q4 shares ({q4_shares}) - cannot calculate EPS")
+            logger.warning(f"FY{fy}: Invalid Q4 shares ({q4_shares}) - cannot calculate EPS")
             return None
 
         q4_eps_value = q4_ni.numeric_value / q4_shares
 
-        log.debug(f"Derived Q4 EPS for FY{fy}: ${q4_eps_value:.2f} "
+        logger.debug(f"Derived Q4 EPS for FY{fy}: ${q4_eps_value:.2f} "
                   f"(NI ${q4_ni.numeric_value/1e9:.2f}B / {q4_shares/1e9:.2f}B shares, "
                   f"route={'A-stable' if cv <= cv_threshold else 'B-volatile'})")
 
